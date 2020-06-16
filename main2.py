@@ -1,12 +1,21 @@
 from flask import Flask, render_template, request, redirect, url_for, \
-    flash, make_response
+    flash, make_response, session
 from flask_script import Manager, Command, Shell
 from forms import ContactForm
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+from flask_migrate import Migrate, MigrateCommand
 
 app = Flask(__name__)
 app.debug = True
 app.config['SECRET_KEY'] = 'a really really really really long secret key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@localhost/flask_app_db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
+
 manager = Manager(app)
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+manager.add_command('db', MigrateCommand)
 
 class Faker(Command):
     'Команда для добавления поддельных данных в таблицы'
@@ -41,9 +50,9 @@ def books(genre):
 @app.route('/login/', methods=['post', 'get'])
 def login():
     message = ''
+    username = ''
+    password = ''
     if request.method == 'POST':
-        global username
-        global password
         username = request.form.get('username')
         password = request.form.get('password')
 
@@ -64,6 +73,9 @@ def contact():
         print(email)
         print(message)
         # здесь логика базы данных
+        feedback = Feedback(name=name, email=email, message=message)
+        db.session.add(feedback)
+        db.session.commit()
         print("\nData received. Now redirecting ...")
         flash("Message Received", "success")
         return redirect(url_for('contact'))
@@ -94,6 +106,89 @@ def article():
         res.headers['location'] = url_for('article')
         return res, 302
     return render_template('article.html')
+
+@app.route('/visits-counter/')
+def visits():
+    if 'visits' in session:
+        session['visits'] = session.get('visits') + 1
+    else:
+        session['visits'] = 1
+    return "Total visits: {}".format(session.get('visits'))
+
+@app.route('/delete-visits/')
+def delete_visits():
+    session.pop('visits', None)
+    return 'Visits deleted'
+
+class Category(db.Model):
+    __tablename__ = 'categories'
+    id = db.Column(db.Integer(), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False)
+    created_on = db.Column(db.DateTime(), default=datetime.utcnow)
+    posts = db.relationship('Post', backref='category', cascade='all,delete-orphan')
+
+    def __repr__(self):
+	    return "<{}:{}>".format(id, self.name)
+
+post_tags = db.Table('post_tags',
+    db.Column('post_id', db.Integer, db.ForeignKey('posts.id')),
+    db.Column('tag_id', db.Integer, db.ForeignKey('tags.id'))
+)
+
+class Post(db.Model):
+    __tablename__ = 'posts'
+    id = db.Column(db.Integer(), primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text(), nullable=False)
+    created_on = db.Column(db.DateTime(), default=datetime.utcnow)
+    updated_on = db.Column(db.DateTime(), default=datetime.utcnow, onupdate=datetime.utcnow)
+    category_id = db.Column(db.Integer(), db.ForeignKey('categories.id'))
+
+    def __repr__(self):
+	    return "<{}:{}>".format(self.id,  self.title[:10])
+
+class  Tag(db.Model):
+    __tablename__ = 'tags'
+    id = db.Column(db.Integer(), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False)
+    created_on  =  db.Column(db.DateTime(), default=datetime.utcnow)
+    posts = db.relationship('Post', secondary=post_tags, backref='tags')
+
+    def __repr__(self):
+	    return "<{}:{}>".format(id, self.name)
+
+class Feedback(db.Model):
+    __tablename__ = 'feedbacks'
+    id = db.Column(db.Integer(), primary_key=True)
+    name = db.Column(db.String(1000), nullable=False)
+    email = db.Column(db.String(100), nullable=False)
+    message = db.Column(db.Text(), nullable=False)
+    created_on = db.Column(db.DateTime(), default=datetime.utcnow)
+
+    def __repr__(self):
+	    return "<{}:{}>".format(self.id, self.name)
+
+class Employee(db.Model):
+    __tablename__ = 'employees'
+    id = db.Column(db.Integer(), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    designation = db.Column(db.String(255), nullable=False)
+    doj = db.Column(db.Date(), nullable=False)
+
+@app.route('/session/')
+def updating_session():
+    res = str(session.items())
+
+    cart_item = {'pineapples': '10', 'apples': '20', 'mangoes': '30'}
+    if 'cart_item' in session:
+	    session['cart_item']['pineapples'] = '100'
+	    session.modified = True
+    else:
+	    session['cart_item'] = cart_item
+    return res
 
 if __name__ == "__main__":
     manager.run()
